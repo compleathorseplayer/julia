@@ -106,6 +106,31 @@ macro specialize(vars...)
     return Expr(:meta, :specialize, vars...)
 end
 
+"""
+    @isdefined s -> Bool
+
+Tests whether variable `s` is defined in the current scope.
+
+See also [`isdefined`](@ref).
+
+# Examples
+```jldoctest
+julia> function f()
+           println(@isdefined x)
+           x = 3
+           println(@isdefined x)
+       end
+f (generic function with 1 method)
+
+julia> f()
+false
+true
+```
+"""
+macro isdefined(s::Symbol)
+    return Expr(:escape, Expr(:isdefined, s))
+end
+
 macro _pure_meta()
     return Expr(:meta, :pure)
 end
@@ -280,7 +305,15 @@ _tuple_error(T::Type, x) = (@_noinline_meta; throw(MethodError(convert, (T, x)))
 
 convert(::Type{T}, x::T) where {T<:Tuple} = x
 function convert(::Type{T}, x::NTuple{N,Any}) where {N, T<:Tuple}
-    NTuple{N,Union{}} <: T || _tuple_error(T, x)
+    # First see if there could be any conversion of the input type that'd be a subtype of the output.
+    # If not, we'll throw an explicit MethodError (otherwise, it might throw a typeassert).
+    S = NTuple{N,Union{}}
+    # this test is a work-around for #32392: inference doesn't currently
+    # realize this can't be true, so it successfully prevents it from dropping
+    # the subtyping test on the next line (assuming it's definitely false)
+    # whenever `N` wasn't known at compile time
+    @isdefined(N) || (S = inferencebarrier(:unreachable))
+    S <: T || _tuple_error(T, x)
     cvt1(n) = (@_inline_meta; convert(fieldtype(T, n), getfield(x, n, #=boundscheck=#false)))
     return ntuple(cvt1, Val(N))::NTuple{N,Any}
 end
